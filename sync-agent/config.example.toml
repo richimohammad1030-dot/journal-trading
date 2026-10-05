@@ -1,0 +1,23 @@
+# Salin file ini menjadi config.toml, lalu isi bagian yang ditandai.
+# Password TIDAK ditulis di sini; disimpan di Windows Credential Manager lewat setup_credentials.py
+
+[supabase]
+url = "https://nhbyarsjourxjxtigmrb.supabase.co"
+anon_key = "sb_publishable_aHGGKQv3cCWOJVWjdeIGMQ_NlyjAxLR"
+email = "ISI_EMAIL_LOGIN_JURNAL@contoh.com"   # email yang sama dengan login aplikasi jurnal
+
+# Satu blok [[accounts]] per akun MT5. Boleh lebih dari satu.
+[[accounts]]
+login = 12345678                 # nomor akun MT5
+server = "NamaBroker-Server"     # persis seperti di MT5 (File > Login to Trade Account)
+label = "Akun Utama"             # nama tampilan di aplikasi
+# Disarankan: instalasi MT5 terpisah khusus jurnal, supaya MT5 yang kamu pakai trading
+# di laptop tidak ikut berpindah ke mode investor (read-only).
+# terminal_path = "C:\\MT5-Jurnal\\terminal64.exe"
+# Bila jam server broker tidak terdeteksi otomatis (mis. selalu sync saat weekend), isi manual:
+# server_utc_offset_hours = 3
+
+# Rapor mingguan/bulanan ke Telegram (opsional). Jalankan dulu: python telegram_setup.py
+[telegram]
+enabled = false
+app_url = "https://jurnal-richi.netlify.app"   # alamat aplikasimu, untuk tautan di pesan

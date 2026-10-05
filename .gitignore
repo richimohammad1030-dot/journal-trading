@@ -1,0 +1,15 @@
+# dependensi & hasil build
+node_modules/
+app/dist/
+app/dev-dist/
+__pycache__/
+*.pyc
+
+# rahasia & konfigurasi pribadi
+.env
+app/.env
+sync-agent/config.toml
+
+# lain-lain
+.DS_Store
+Thumbs.db

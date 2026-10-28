@@ -2,8 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, loadAccounts, loadAccountData, demoData, demoPublicProfile } from './lib/data'
 import { traderDNA } from './lib/dna'
 import { PERIODS, buildCurve, computeTags, periodMetrics, periodRange, summarize } from './lib/stats'
+import { MARKETS, MARKET_ICON, market as marketOf } from './lib/markets'
+import { ago, money } from './lib/format'
+import { I, Icon } from './components/icons'
 import { Chips, Skeleton, Empty } from './components/ui'
 import TradeDetail from './components/TradeDetail'
+import CommandPalette from './components/CommandPalette'
 import Login from './pages/Login'
 import Overview from './pages/Overview'
 import CalendarPage from './pages/CalendarPage'
@@ -14,30 +18,52 @@ import ReportsPage from './pages/ReportsPage'
 import PublicProfile from './pages/PublicProfile'
 import SetPassword from './pages/SetPassword'
 
-const I = {
-  home: 'M3 11.5 12 4l9 7.5M5.5 9.5V20h13V9.5',
-  cal: 'M4 6.5h16v13H4zM4 10.5h16M8.5 3.5v5M15.5 3.5v5',
-  list: 'M8.5 6.5h11M8.5 12h11M8.5 17.5h11M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01',
-  chart: 'M4 19.5h16M7 16v-5M12 16V6.5M17 16v-8',
-  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 20a7.5 7.5 0 0 1 15 0',
-  doc: 'M6.5 3.5h8l3.5 3.5v13.5h-11.5zM14 3.5V7.5h4M9.5 12h5M9.5 15.5h5',
-}
 const NAV = [
-  ['ringkasan', 'Ringkasan', I.home, Overview, true],
+  ['ringkasan', 'Dashboard', I.home, Overview, true],
+  ['trade', 'Trade Log', I.list, TradesPage, true],
   ['kalender', 'Kalender', I.cal, CalendarPage, false],
-  ['trade', 'Trade', I.list, TradesPage, true],
   ['analitik', 'Analitik', I.chart, AnalyticsPage, true],
   ['rapor', 'Rapor', I.doc, ReportsPage, false],
 ]
 const ACCOUNT_ROUTE = ['akun', 'Akun', I.user, AccountPage, false]
-const Icon = ({ d, className = 'w-[22px] h-[22px]' }) => (
-  <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
-)
 const store = {
   get: (k, d) => { try { return localStorage.getItem(k) ?? d } catch { return d } },
   set: (k, v) => { try { localStorage.setItem(k, v) } catch { /* abaikan */ } },
 }
 const routeFromHash = () => (location.hash.replace('#/', '') || 'ringkasan')
+
+/** Dropdown kecil di topbar */
+function Dropdown({ icon, label, value, options, onChange, align = 'right' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const f = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    window.addEventListener('pointerdown', f)
+    return () => window.removeEventListener('pointerdown', f)
+  }, [open])
+  const cur = options.find((o) => o[0] === value)
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen(!open)} className={`card flex items-center gap-2.5 h-11 pl-3.5 pr-3 text-[13.5px] rounded-xl hover:border-accent/40 transition ${open ? 'border-accent/50' : ''}`}>
+        <Icon d={icon} className="w-[18px] h-[18px] text-accent" />
+        <span className="max-w-[160px] truncate">{label || cur?.[1]}</span>
+        <Icon d={I.chev} className={`w-4 h-4 text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className={`card absolute z-50 mt-2 min-w-[210px] p-1.5 shadow-2xl sheet-in ${align === 'right' ? 'right-0' : 'left-0'}`}>
+          {options.map(([id, l, sub]) => (
+            <button key={id} onClick={() => { onChange(id); setOpen(false) }}
+              className={`w-full text-left px-3 py-2 rounded-lg text-[13px] flex items-center justify-between gap-3 ${id === value ? 'nav-on' : 'text-muted hover:text-ink hover:bg-raised'}`}>
+              <span className="truncate">{l}{sub && <span className="block text-[11px] text-faint">{sub}</span>}</span>
+              {id === value && <span className="text-accent">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function App() {
   const [session, setSession] = useState(undefined)
@@ -47,21 +73,32 @@ export default function App() {
   const [route, setRoute] = useState(routeFromHash)
   const [theme, setThemeState] = useState(() => store.get('theme', 'dark'))
   const [period, setPeriod] = useState(() => store.get('period', 'all'))
+  const [mkt, setMktState] = useState(() => store.get('market', 'all'))
+  const [collapsed, setCollapsedState] = useState(() => store.get('sidebar', '0') === '1')
   const [accounts, setAccounts] = useState(null)
   const [accountId, setAccountIdState] = useState(() => store.get('account', null))
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [detail, setDetail] = useState(null)
+  const [palette, setPalette] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
   const setTheme = (t) => { setThemeState(t); store.set('theme', t) }
   const setAccountId = (id) => { setAccountIdState(id); store.set('account', id) }
   const changePeriod = (p) => { setPeriod(p); store.set('period', p) }
+  const setMarket = (m) => { setMktState(m); store.set('market', m) }
+  const setCollapsed = (c) => { setCollapsedState(c); store.set('sidebar', c ? '1' : '0') }
 
   useEffect(() => {
     const f = () => { setRoute(routeFromHash()); setDetail(null) }
     window.addEventListener('hashchange', f)
     return () => window.removeEventListener('hashchange', f)
+  }, [])
+  useEffect(() => {
+    const k = (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette((p) => !p) } }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
   }, [])
   const [slideDir, setSlideDir] = useState('none')
   const go = (r) => {
@@ -73,7 +110,7 @@ export default function App() {
   const touch = useRef(null)
   const onTouchStart = (e) => {
     const t = e.touches[0]
-    touch.current = e.target.closest('canvas, .recharts-wrapper, .no-scrollbar, .overflow-x-auto, input, select') ? null : { x: t.clientX, y: t.clientY }
+    touch.current = e.target.closest('canvas, svg, .recharts-wrapper, .no-scrollbar, .overflow-x-auto, input, select') ? null : { x: t.clientX, y: t.clientY }
   }
   const onTouchEnd = (e) => {
     if (!touch.current || detail) return
@@ -105,31 +142,35 @@ export default function App() {
 
   const reload = useCallback(() => {
     if (demo || !account) return
-    setErr(null)
-    loadAccountData(account.id).then(setData).catch((e) => setErr(e.message))
+    setErr(null); setRefreshing(true)
+    Promise.all([loadAccounts().then(setAccounts), loadAccountData(account.id).then(setData)])
+      .catch((e) => setErr(e.message)).finally(() => setRefreshing(false))
   }, [account?.id, demo]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (demo) return; setData(null); reload() }, [reload, demo])
+  useEffect(() => { if (demo) return; setData(null); reload() }, [account?.id, demo]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const ctx = useMemo(() => {
     if (!data || !account) return null
-    const allTrades = [...data.trades].sort((a, b) => new Date(a.close_time) - new Date(b.close_time))
-    const curve = buildCurve(allTrades, data.cashflows)
+    const accountTrades = [...data.trades].sort((a, b) => new Date(a.close_time) - new Date(b.close_time))
+    const curve = buildCurve(accountTrades, data.cashflows)
     const before = new Map()
     let bal = 0
-    const ev = [...data.cashflows.map((c) => ({ t: c.time, a: +c.amount })), ...allTrades.map((t) => ({ t: t.close_time, a: +t.net_pnl, id: t.position_id }))].sort((x, y) => new Date(x.t) - new Date(y.t))
+    const ev = [...data.cashflows.map((c) => ({ t: c.time, a: +c.amount })), ...accountTrades.map((t) => ({ t: t.close_time, a: +t.net_pnl, id: t.position_id }))].sort((x, y) => new Date(x.t) - new Date(y.t))
     for (const e of ev) { if (e.id != null) before.set(e.id, bal); bal += e.a }
-    for (const t of allTrades) t.balance_before = before.get(t.position_id)
+    for (const t of accountTrades) { t.balance_before = before.get(t.position_id); t.market = marketOf(t.symbol) }
+    const marketCounts = { all: accountTrades.length }
+    for (const t of accountTrades) marketCounts[t.market] = (marketCounts[t.market] || 0) + 1
+    const allTrades = mkt === 'all' ? accountTrades : accountTrades.filter((t) => t.market === mkt)
     const [from, to] = periodRange(period)
     const trades = allTrades.filter((t) => { const ts = +new Date(t.close_time); return (!from || ts >= from) && (!to || ts < to) })
-    const tags = computeTags(allTrades, data.sltp)
+    const tags = computeTags(accountTrades, data.sltp)
     const inRange = (iso) => { const ts = +new Date(iso); return (!from || ts >= from) && (!to || ts < to) }
     return {
-      account, accounts, allTrades, trades, curve, cashflows: data.cashflows, positions: data.positions, runs: data.runs,
-      periodCashflows: data.cashflows.filter((c) => inRange(c.time)),
+      account, accounts, accountTrades, allTrades, trades, curve, cashflows: data.cashflows, positions: data.positions, runs: data.runs,
+      periodCashflows: data.cashflows.filter((c) => inRange(c.time)), period, market: mkt, setMarket, marketCounts, range: [from, to],
       s: summarize(trades), pm: periodMetrics(curve, from, to), tags, accountId: account.id,
       dna: traderDNA(trades, tags),
     }
-  }, [data, account, accounts, period])
+  }, [data, account, accounts, period, mkt]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (route.startsWith('p/')) {
     const token = route.slice(2)
@@ -148,45 +189,108 @@ export default function App() {
   const cur = route === 'akun' ? ACCOUNT_ROUTE : NAV.find((n) => n[0] === route) || NAV[0]
   const Page = cur[3]
   const di = detail ? detail.list.findIndex((x) => x.position_id === detail.t.position_id) : -1
+  const syncAge = account?.last_sync_at ? Date.now() - new Date(account.last_sync_at) : Infinity
+  const syncTone = syncAge < 45 * 60e3 ? 'text-up' : syncAge < 6 * 3600e3 ? 'text-warn' : 'text-down'
+  const initial = (account?.name || 'T').trim()[0]?.toUpperCase()
+  const navBtn = (on) => `group relative flex items-center gap-3 rounded-xl text-[14px] transition ${collapsed ? 'justify-center h-11 w-11 mx-auto' : 'px-3.5 h-11'} ${on ? 'nav-on font-semibold' : 'text-muted hover:text-ink hover:bg-raised/70'}`
+  const Tip = ({ children }) => collapsed ? <span className="pointer-events-none absolute left-full ml-3 px-2 py-1 rounded-md bg-raised border border-line text-[12px] text-ink whitespace-nowrap opacity-0 group-hover:opacity-100 transition z-50">{children}</span> : null
 
   return (
-    <div className="min-h-dvh md:pl-60">
+    <div className={`min-h-dvh transition-[padding] duration-300 ${collapsed ? 'md:pl-[76px]' : 'md:pl-64'}`}>
       {/* Sidebar desktop */}
-      <aside className="no-print hidden md:flex fixed inset-y-0 left-0 w-60 flex-col border-r border-line bg-surface px-3 py-5">
-        <div className="flex items-center gap-2.5 px-2 mb-7">
-          <img src="icon.svg" className="w-8 h-8" alt="" />
-          <div><div className="font-semibold leading-tight">Jurnal Trading</div><div className="text-[11px] text-faint">{demo ? 'Mode demo' : 'Read-only dari MT5'}</div></div>
-        </div>
-        {NAV.map(([id, label, icon]) => (
-          <button key={id} onClick={() => go(id)} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl mb-0.5 text-[14px] transition ${route === id ? 'bg-raised text-ink font-semibold' : 'text-muted hover:text-ink hover:bg-raised/60'}`}>
-            <Icon d={icon} className="w-5 h-5" />{label}
+      <aside className={`no-print hidden md:flex fixed inset-y-0 left-0 z-40 flex-col border-r border-line bg-surface/80 backdrop-blur-xl py-5 transition-[width] duration-300 ${collapsed ? 'w-[76px] px-2' : 'w-64 px-4'}`}>
+        <div className={`flex items-center mb-7 ${collapsed ? 'flex-col gap-3' : 'gap-3 px-1'}`}>
+          <img src="icon.svg" className="w-10 h-10 drop-shadow-[0_0_12px_rgb(var(--glow)/.45)]" alt="" />
+          {!collapsed && <div className="min-w-0 flex-1"><div className="font-bold tracking-wide leading-tight">JURNAL</div><div className="text-[11.5px] text-muted">{demo ? 'Mode demo' : 'Trading Journal'}</div></div>}
+          <button onClick={() => setCollapsed(!collapsed)} className="w-8 h-8 rounded-lg border border-line text-muted hover:text-ink hover:border-accent/40 grid place-items-center transition" aria-label={collapsed ? 'Lebarkan menu' : 'Ciutkan menu'}>
+            <Icon d={I.collapse} className={`w-4 h-4 transition-transform duration-300 ${collapsed ? 'rotate-180' : ''}`} />
           </button>
-        ))}
-        <button onClick={() => go('akun')} className={`mt-auto flex items-center gap-3 px-3 py-2.5 rounded-xl text-[14px] transition ${route === 'akun' ? 'bg-raised text-ink font-semibold' : 'text-muted hover:text-ink hover:bg-raised/60'}`}>
-          <Icon d={I.user} className="w-5 h-5" />
-          <span className="min-w-0 text-left"><span className="block">Akun</span>{account && <span className="block text-[11px] text-faint font-normal truncate">{account.name} · #{account.login}</span>}</span>
-        </button>
+        </div>
+        <nav className="space-y-1">
+          {NAV.map(([id, label, icon]) => (
+            <button key={id} onClick={() => go(id)} className={navBtn(route === id)}>
+              <Icon d={icon} className="w-5 h-5 shrink-0" />{!collapsed && label}<Tip>{label}</Tip>
+            </button>
+          ))}
+        </nav>
+        {!collapsed && <div className="mt-7 mb-2 px-3 text-[11px] font-semibold tracking-[.14em] text-faint">PASAR</div>}
+        {collapsed && <div className="my-4 mx-3 border-t border-line" />}
+        <nav className="space-y-1">
+          {MARKETS.map(([id, label]) => (
+            <button key={id} onClick={() => setMarket(id)} className={navBtn(mkt === id)}>
+              <Icon d={MARKET_ICON[id]} className="w-5 h-5 shrink-0" />
+              {!collapsed && <><span className="flex-1 text-left">{id === 'all' ? 'Semua Pasar' : label}</span>
+                {ctx && <span className="num text-[11px] text-faint">{ctx.marketCounts[id] || 0}</span>}</>}
+              <Tip>{label}</Tip>
+            </button>
+          ))}
+        </nav>
+
+        <div className="mt-auto space-y-2">
+          {!collapsed && account && (
+            <div className="card p-3.5">
+              <div className="flex items-center gap-2 text-[12.5px] font-semibold">
+                <span className={`pulse-dot w-2 h-2 rounded-full bg-current ${syncTone}`} />Sync otomatis
+              </div>
+              <div className="text-[11.5px] text-muted mt-1">Terakhir {ago(account.last_sync_at)} · tiap 15 menit dari cloud</div>
+              {!demo && <button onClick={reload} className="mt-2.5 w-full h-8 rounded-lg nav-on text-[12px] font-semibold flex items-center justify-center gap-2">
+                <Icon d={I.refresh} className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />Muat ulang data
+              </button>}
+            </div>
+          )}
+          <button onClick={() => go('akun')} className={navBtn(route === 'akun')}>
+            <Icon d={I.user} className="w-5 h-5 shrink-0" />
+            {!collapsed && <span className="min-w-0 text-left"><span className="block">Akun & pengaturan</span></span>}
+            <Tip>Akun</Tip>
+          </button>
+        </div>
       </aside>
 
-      {/* Judul halaman (ikut tergulir di HP) */}
-      <div className="no-print max-w-6xl mx-auto px-4 pt-5 safe-t md:hidden">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0">
-            <h1 className="text-[22px] font-semibold leading-tight">{cur[1]}</h1>
-            {account && <div className="text-[11.5px] text-faint truncate">{account.name} · #{account.login}{demo && ' · data contoh'}</div>}
-          </div>
-          <div className="flex items-center gap-1">
-            <button onClick={() => go('akun')} className={`w-9 h-9 rounded-full grid place-items-center ${route === 'akun' ? 'bg-raised text-ink' : 'text-muted hover:bg-raised'}`} aria-label="Akun dan pengaturan"><Icon d={I.user} className="w-5 h-5" /></button>
-            {!demo && account && <button onClick={reload} className="w-9 h-9 rounded-full hover:bg-raised text-muted grid place-items-center" aria-label="Muat ulang"><Icon d="M20 11.5A8 8 0 1 0 17.7 17M20 5v6.5h-6.5" className="w-5 h-5" /></button>}
+      {/* Topbar desktop */}
+      <div className="no-print hidden md:block sticky top-0 z-30 bg-bg/70 backdrop-blur-xl border-b border-line">
+        <div className="max-w-[1500px] mx-auto px-6 h-[72px] flex items-center gap-3">
+          <button onClick={() => setPalette(true)} className="card flex-1 max-w-[460px] h-11 rounded-xl flex items-center gap-3 px-4 text-[13.5px] text-faint hover:text-muted hover:border-accent/40 transition">
+            <Icon d={I.search} className="w-[18px] h-[18px]" />Cari trade, pair, tiket, atau halaman…
+            <span className="ml-auto text-[11px] border border-line rounded-md px-1.5 py-0.5">Ctrl K</span>
+          </button>
+          <div className="ml-auto flex items-center gap-2.5">
+            {cur[4] && <Dropdown icon={I.cal} value={period} options={PERIODS} onChange={changePeriod} />}
+            {accounts?.length > 0 && (
+              <Dropdown icon={I.wallet} value={account?.id} onChange={setAccountId}
+                label={account ? `${account.name}` : 'Akun'}
+                options={accounts.map((a) => [a.id, a.name, `#${a.login} · ${money(+a.balance, a.currency)}`])} />
+            )}
+            {!demo && account && <button onClick={reload} className="card w-11 h-11 rounded-xl grid place-items-center text-muted hover:text-ink transition" aria-label="Muat ulang" title={`Sync terakhir ${ago(account.last_sync_at)}`}>
+              <Icon d={I.refresh} className={`w-[18px] h-[18px] ${refreshing ? 'animate-spin' : ''}`} />
+            </button>}
+            <button onClick={() => go('akun')} className="w-11 h-11 rounded-full grid place-items-center font-semibold text-[15px] bg-gradient-to-br from-raised to-surface border border-line hover:border-accent/50 transition" aria-label="Akun">{initial}</button>
           </div>
         </div>
       </div>
 
-      <header className="no-print sticky top-0 z-30 bg-bg/90 backdrop-blur-md border-b border-line md:safe-t">
+      {/* Judul halaman (ikut tergulir di HP) */}
+      <div className="no-print px-4 pt-5 safe-t md:hidden">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <img src="icon.svg" className="w-8 h-8 drop-shadow-[0_0_10px_rgb(var(--glow)/.45)]" alt="" />
+            <div className="min-w-0">
+              <h1 className="text-[20px] font-bold leading-tight">{cur[1]}</h1>
+              {account && <div className="text-[11.5px] text-faint truncate flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full bg-current ${syncTone}`} />{account.name} · sync {ago(account.last_sync_at)}</div>}
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPalette(true)} className="w-9 h-9 rounded-full text-muted hover:bg-raised grid place-items-center" aria-label="Cari"><Icon d={I.search} className="w-5 h-5" /></button>
+            {!demo && account && <button onClick={reload} className="w-9 h-9 rounded-full hover:bg-raised text-muted grid place-items-center" aria-label="Muat ulang"><Icon d={I.refresh} className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} /></button>}
+            <button onClick={() => go('akun')} className={`w-9 h-9 rounded-full grid place-items-center text-[13px] font-semibold border ${route === 'akun' ? 'border-accent/60 text-ink' : 'border-line text-muted'}`} aria-label="Akun dan pengaturan">{initial}</button>
+          </div>
+        </div>
+      </div>
+
+      <header className="no-print md:hidden sticky top-0 z-30 bg-bg/85 backdrop-blur-xl border-b border-line">
         {/* Tab menu HP: di atas, bebas dari lencana Netlify di pojok bawah */}
-        <nav className="md:hidden relative max-w-6xl mx-auto px-2 pt-2">
+        <nav className="relative px-2 pt-2">
           <div className="grid grid-cols-5 relative">
-            <span aria-hidden className="absolute bottom-0 h-[3px] rounded-full bg-accent transition-transform duration-300 ease-out"
+            <span aria-hidden className="absolute bottom-0 h-[3px] rounded-full bg-accent shadow-[0_0_10px_rgb(var(--glow)/.8)] transition-transform duration-300 ease-out"
               style={{ width: '20%', transform: `translateX(${Math.max(0, NAV.findIndex((n) => n[0] === route)) * 100}%)`, opacity: route === 'akun' ? 0 : 1 }} />
             {NAV.map(([id, label, icon]) => (
               <button key={id} onClick={() => go(id)} className={`flex flex-col items-center gap-0.5 pt-1 pb-2 text-[10.5px] transition-colors ${route === id ? 'text-ink font-semibold' : 'text-faint'}`}>
@@ -195,35 +299,37 @@ export default function App() {
             ))}
           </div>
         </nav>
-        <div className="max-w-6xl mx-auto px-4 md:pt-3 pb-2.5">
-          <div className="hidden md:flex items-center justify-between mb-2">
-            <div className="min-w-0">
-              <h1 className="text-[20px] font-semibold leading-tight">{cur[1]}</h1>
-              {account && <div className="text-[11.5px] text-faint truncate">{account.name} · #{account.login}{demo && ' · data contoh'}</div>}
-            </div>
-            {!demo && account && <button onClick={reload} className="w-9 h-9 rounded-full hover:bg-raised text-muted grid place-items-center" aria-label="Muat ulang">
-              <Icon d="M20 11.5A8 8 0 1 0 17.7 17M20 5v6.5h-6.5" className="w-5 h-5" />
-            </button>}
+        {(cur[4] || route === 'kalender') && (
+          <div className="px-4 pb-2.5 pt-2 space-y-2">
+            {cur[4] && <Chips value={period} onChange={changePeriod} options={PERIODS} />}
+            <Chips value={mkt} onChange={setMarket} options={MARKETS.map(([id, l]) => [id, `${l}${ctx ? ` · ${ctx.marketCounts[id] || 0}` : ''}`])} />
           </div>
-          {cur[4] && <Chips className="pt-2 md:pt-0" value={period} onChange={changePeriod} options={PERIODS} />}
-        </div>
+        )}
       </header>
 
-      <main key={route} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className={`max-w-6xl mx-auto px-4 pt-4 pb-24 page-in-${slideDir}`}>
+      <main key={route} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className={`max-w-[1500px] mx-auto px-4 md:px-6 pt-4 md:pt-6 pb-24 page-in-${slideDir}`}>
+        {route !== 'ringkasan' && <h1 className="hidden md:block text-[26px] font-bold tracking-tight mb-4 fade-up">{cur[1]}</h1>}
         {err && <div className="card p-4 mb-4 text-sm text-down">Gagal memuat data: {err}</div>}
         {accounts && accounts.length === 0 ? (
-          <div className="card"><Empty title="Belum ada akun tersambung">Jalankan sync agent di laptop (lihat panduan setup). Setelah sync pertama selesai, akun dan riwayat trade muncul di sini otomatis.</Empty>
+          <div className="card"><Empty title="Belum ada akun tersambung">Jalankan sync (lihat panduan). Setelah sync pertama selesai, akun dan riwayat trade muncul di sini otomatis.</Empty>
             <div className="text-center pb-6"><button onClick={signOut} className="text-sm text-muted underline">Keluar</button></div></div>
         ) : !ctx ? (
-          <div className="space-y-3">
-            <Skeleton className="h-36" />
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-20" />)}</div>
-            <Skeleton className="h-64" />
+          <div className="space-y-4">
+            <Skeleton className="h-16" />
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">{Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-32" />)}</div>
+            <div className="grid md:grid-cols-3 gap-4"><Skeleton className="h-80 md:col-span-2" /><Skeleton className="h-80" /></div>
           </div>
         ) : (
           <Page ctx={{ ...ctx, openTrade, go, setAccountId, theme, setTheme, signOut, demo }} />
         )}
       </main>
+
+      {palette && ctx && (
+        <CommandPalette trades={ctx.accountTrades} cur={ctx.account.currency} nav={NAV} onClose={() => setPalette(false)}
+          onGo={(r) => { setPalette(false); go(r) }}
+          onTrade={(t) => { setPalette(false); setDetail({ t, list: ctx.accountTrades }) }}
+          onMarket={(m) => { setPalette(false); setMarket(m) }} />
+      )}
 
       {detail && ctx && (
         <TradeDetail
@@ -236,3 +342,4 @@ export default function App() {
     </div>
   )
 }
+

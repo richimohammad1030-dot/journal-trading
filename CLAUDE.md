@@ -34,7 +34,10 @@ MT5 ──> sync-agent (Python). Utama: GitHub Actions Windows (.github/workflow
 | `sync-agent/sync_agent.py` | Loop utama: MT5 → Supabase. Flag `--full` (sinkron ulang semua deal), `--rechart` (hitung ulang chart dan MAE/MFE) |
 | `sync-agent/telegram_*.py` | Rapor mingguan/bulanan ke Telegram (opsional) |
 | `sync-agent/install_task.ps1` | Mendaftarkan Task Scheduler |
-| `app/src/App.jsx` | Shell, auth, hash routing. Di HP: tab atas + swipe (dock melayang sengaja dihapus) |
+| `app/src/App.jsx` | Shell, auth, hash routing, filter pasar global, sidebar (bisa diciutkan) + topbar desktop. Di HP: tab atas + swipe (dock melayang sengaja dihapus) |
+| `app/src/pages/Overview.jsx` | Dashboard bergaya tema hijau gelap: KPI + sparkline, kurva ekuitas (`DashEquity`), rincian P&L, kalender mini, performa pasar/sesi, risiko, DNA |
+| `app/src/components/` | `viz.jsx` (Sparkline, MiniBars, Ring, Donut, CountUp), `CommandPalette.jsx` (Ctrl/⌘+K), `icons.jsx` |
+| `app/src/lib/markets.js` | Klasifikasi simbol → forex/crypto/indeks/komoditas |
 | `app/src/pages/` | Ringkasan, Kalender, Trade, Analitik, Rapor, Akun, Login, SetPassword, PublicProfile (`#/p/<token>`) |
 | `app/src/lib/` | `data.js` (query Supabase), `stats.js`, `dna.js`, `sim.js`, `reports.js`, `bars.js`, `format.js` |
 

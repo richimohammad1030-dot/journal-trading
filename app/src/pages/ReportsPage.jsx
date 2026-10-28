@@ -144,7 +144,7 @@ function ReportView({ r, cur, tags, openTrade, onBack }) {
 }
 
 export default function ReportsPage({ ctx }) {
-  const { allTrades, cashflows, curve, tags, account, openTrade } = ctx
+  const { accountTrades: allTrades, cashflows, curve, tags, account, openTrade } = ctx
   const [kind, setKind] = useState('week')
   const [sel, setSel] = useState(null)
   const list = useMemo(() => listPeriods(allTrades, kind), [allTrades, kind])

@@ -9,6 +9,7 @@ Jurnal trading pribadi yang terisi otomatis dari akun MetaTrader 5. Read-only, t
 | `app/` | Aplikasi web/PWA (React + Vite + Tailwind), data dari Supabase |
 | `sync-agent/` | Program Python di PC Windows yang menarik riwayat MT5 ke Supabase |
 | `PANDUAN-SETUP.md` | Langkah setup lengkap dari awal |
+| `PANDUAN-CLOUD.md` | Sync selalu on lewat GitHub Actions (tanpa laptop) |
 
 ## Fitur
 
@@ -32,6 +33,8 @@ npm run build             # hasil di app/dist
 Mode demo dengan data contoh: buka `/?demo`.
 
 ## Sync agent (Windows)
+
+Mode utama sekarang cloud: lihat `PANDUAN-CLOUD.md`. Cara di bawah ini untuk menjalankan di laptop.
 
 ```bash
 cd sync-agent

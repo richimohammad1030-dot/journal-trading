@@ -13,3 +13,4 @@ sync-agent/config.toml
 # lain-lain
 .DS_Store
 Thumbs.db
+.jurnal-state/

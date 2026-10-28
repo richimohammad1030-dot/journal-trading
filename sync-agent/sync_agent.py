@@ -1,8 +1,12 @@
 """Sync agent Jurnal Trading: MT5 -> Supabase.
 
-Dijalankan otomatis oleh Windows Task Scheduler (saat login + tiap 15 menit).
+Dua mode:
+- Laptop: Windows Task Scheduler (saat login + tiap 15 menit), config.toml + Windows Credential Manager.
+- Cloud: GitHub Actions (.github/workflows/sync.yml). Tanpa config.toml; semua dari environment
+  variable (GitHub Secrets): MT5_LOGIN, MT5_SERVER, MT5_PASSWORD, SUPABASE_EMAIL, SUPABASE_PASSWORD.
 Bisa juga dijalankan manual:  python sync_agent.py
-Opsi:  --full   tarik ulang seluruh riwayat (abaikan sync terakhir)
+Opsi:  --full     tarik ulang seluruh riwayat (abaikan sync terakhir)
+       --rechart  hitung ulang chart, MAE/MFE untuk semua trade
 """
 from __future__ import annotations
 
@@ -16,8 +20,12 @@ import tomllib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import keyring
 import requests
+
+try:
+    import keyring
+except Exception:  # mode cloud tidak butuh keyring
+    keyring = None
 
 from price_context import (compact, ctx_window, exec_window, excursions,
                            pick_timeframes, trend_at)
@@ -27,7 +35,7 @@ from reconstruct import (Deal, PositionHints, SymbolSpec, build_trade,
 
 APP = "JurnalTrading"
 HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP
+DATA_DIR = Path(os.environ.get("JURNAL_DATA_DIR") or Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = DATA_DIR / "state.json"
 LOCK_FILE = DATA_DIR / "sync.lock"
@@ -44,10 +52,43 @@ log.addHandler(logging.StreamHandler(sys.stdout))
 # ---------------------------------------------------------------- utilitas
 def load_config() -> dict:
     path = HERE / "config.toml"
-    if not path.exists():
-        sys.exit("config.toml belum ada. Salin config.example.toml lalu jalankan setup_credentials.py")
-    with open(path, "rb") as f:
-        return tomllib.load(f)
+    if path.exists():
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    if os.environ.get("MT5_LOGIN"):
+        return config_from_env()
+    sys.exit("config.toml belum ada. Salin config.example.toml lalu jalankan setup_credentials.py")
+
+
+def config_from_env() -> dict:
+    """Mode cloud: satu akun, semua nilai dari environment (GitHub Secrets / variables)."""
+    env = os.environ
+    missing = [k for k in ("MT5_LOGIN", "MT5_SERVER", "MT5_PASSWORD", "SUPABASE_URL",
+                           "SUPABASE_ANON_KEY", "SUPABASE_EMAIL", "SUPABASE_PASSWORD") if not env.get(k)]
+    if missing:
+        sys.exit("Environment belum lengkap: " + ", ".join(missing))
+    acc = {"login": int(env["MT5_LOGIN"]), "server": env["MT5_SERVER"]}
+    if env.get("MT5_LABEL"):
+        acc["label"] = env["MT5_LABEL"]
+    if env.get("MT5_TERMINAL_PATH"):
+        acc["terminal_path"] = env["MT5_TERMINAL_PATH"]
+    if env.get("MT5_SERVER_UTC_OFFSET_HOURS"):
+        acc["server_utc_offset_hours"] = float(env["MT5_SERVER_UTC_OFFSET_HOURS"])
+    return {"supabase": {"url": env["SUPABASE_URL"], "anon_key": env["SUPABASE_ANON_KEY"],
+                         "email": env["SUPABASE_EMAIL"]},
+            "accounts": [acc], "telegram": {"enabled": False}}
+
+
+def secret(keyring_name: str, env_name: str | None = None) -> str | None:
+    """Ambil rahasia dari environment (mode cloud) atau Windows Credential Manager (mode laptop)."""
+    if env_name and os.environ.get(env_name):
+        return os.environ[env_name]
+    if keyring is None:
+        return None
+    try:
+        return keyring.get_password(APP, keyring_name)
+    except Exception:
+        return None
 
 
 def load_state() -> dict:
@@ -223,7 +264,7 @@ def price_enrich(mt5, t: dict, spec: SymbolSpec, off: int) -> tuple[dict, list[d
 def sync_account(mt5, sb: Supabase, acc_cfg: dict, state: dict, full: bool, rechart: bool = False) -> dict:
     login = int(acc_cfg["login"])
     server = acc_cfg["server"]
-    pw = keyring.get_password(APP, f"mt5:{login}@{server}")
+    pw = secret(f"mt5:{login}@{server}", "MT5_PASSWORD")
     if not pw:
         raise RuntimeError(f"Investor password akun {login} belum disimpan. Jalankan setup_credentials.py")
 
@@ -372,11 +413,12 @@ def main() -> None:
     if not acquire_lock():
         log.info("Sync lain masih berjalan, dilewati.")
         return
+    failed = 0
     try:
         import MetaTrader5 as mt5
         cfg = load_config()
         sb_cfg = cfg["supabase"]
-        sb_pw = keyring.get_password(APP, f"supabase:{sb_cfg['email']}")
+        sb_pw = secret(f"supabase:{sb_cfg['email']}", "SUPABASE_PASSWORD")
         if not sb_pw:
             sys.exit("Password Supabase belum disimpan. Jalankan setup_credentials.py")
 
@@ -391,8 +433,8 @@ def main() -> None:
         sb = Supabase(sb_cfg["url"], sb_cfg["anon_key"], sb_cfg["email"], sb_pw)
         state = load_state()
         tg = cfg.get("telegram", {})
-        tg_token = keyring.get_password(APP, "telegram:token") if tg.get("enabled") else None
-        tg_chat = keyring.get_password(APP, "telegram:chat_id") if tg_token else None
+        tg_token = secret("telegram:token") if tg.get("enabled") else None
+        tg_chat = secret("telegram:chat_id") if tg_token else None
         for acc_cfg in cfg.get("accounts", []):
             try:
                 acc = sync_account(mt5, sb, acc_cfg, state, args.full or args.rechart, args.rechart)
@@ -403,11 +445,14 @@ def main() -> None:
                     except Exception as e:  # rapor gagal tidak menggagalkan sync
                         log.warning("Rapor Telegram gagal: %s", e)
             except Exception as e:  # satu akun gagal tidak menghentikan akun lain
+                failed += 1
                 log.exception("Sync akun %s gagal: %s", acc_cfg.get("login"), e)
             finally:
                 save_state(state)
     finally:
         LOCK_FILE.unlink(missing_ok=True)
+    if failed:
+        sys.exit(1)  # supaya kegagalan terlihat (merah) di GitHub Actions
 
 
 if __name__ == "__main__":

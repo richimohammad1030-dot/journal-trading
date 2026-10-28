@@ -10,7 +10,9 @@ Jurnal trading pribadi milik Richi, **read-only**, yang tersinkron otomatis dari
 
 ## Arsitektur
 ```
-MT5 (laptop Windows) ──> sync-agent (Python, Task Scheduler: saat login + tiap 15 menit)
+MT5 ──> sync-agent (Python). Utama: GitHub Actions Windows (.github/workflows/sync.yml),
+        dipicu cron-job.org tiap 15 menit + cadangan schedule tiap jam.
+        Cadangan: laptop (Task Scheduler)
                               │  REST (PostgREST upsert on_conflict)
                               ▼
                         Supabase (Postgres + Auth + RLS)
@@ -19,7 +21,10 @@ MT5 (laptop Windows) ──> sync-agent (Python, Task Scheduler: saat login + ti
                         app/ (React PWA) ──> Netlify (jurnal-trading-saya.netlify.app)
 ```
 - Trade yang dibuka dari HP saat laptop mati tetap tercatat: sync berikutnya membaca riwayat deal MT5.
-- Login MT5 memakai **investor password (read-only)** yang disimpan di Windows Credential Manager (`keyring`), bukan di file.
+- Login MT5 memakai **investor password (read-only)**. Mode cloud: dari GitHub Secrets (`MT5_LOGIN`, `MT5_SERVER`, `MT5_PASSWORD`, `SUPABASE_EMAIL`, `SUPABASE_PASSWORD`) lewat env; mode laptop: Windows Credential Manager (`keyring`). Fungsi `secret()` di sync_agent.py: env dulu, lalu keyring.
+- Repo **public** (supaya menit Actions gratis). Jangan pernah mencetak saldo/nomor akun di luar nilai secret (otomatis disamarkan), dan jangan commit data pribadi.
+- State sync (`state.json`: offset, last_sync, sltp_seen, charted) di mode cloud disimpan lewat actions/cache (`.jurnal-state`). Bila hilang, sync berikutnya otomatis full.
+- Telegram tidak dipakai di mode cloud (sesuai keinginan Richi: cukup dashboard).
 
 ## Struktur
 | Path | Isi |
@@ -68,7 +73,8 @@ Tabel: `accounts`, `deals`, `trades`, `cashflows`, `open_positions`, `position_s
 
 ## Deploy
 - App: `cd app && npm install && npm run build`, lalu unggah `app/dist` ke Netlify (manual drag & drop, belum tersambung ke GitHub).
-- Sync agent: lihat `PANDUAN-SETUP.md`. Copy di laptop: `C:\Users\USER\Documents\JurnalTrading`.
+- Sync cloud: lihat `PANDUAN-CLOUD.md` (secrets, cron-job.org, mode full/rechart lewat Run workflow).
+- Sync laptop (cadangan): lihat `PANDUAN-SETUP.md`. Copy di laptop: `C:\Users\USER\Documents\JurnalTrading`.
 
 ## Status & ide berikutnya
 - Tahap 1–4 selesai.

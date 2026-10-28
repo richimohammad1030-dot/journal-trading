@@ -1,0 +1,98 @@
+# Sync MT5 -> Supabase di cloud (tanpa laptop).
+# Dijalankan oleh cron-job.org (workflow_dispatch) tiap 15 menit, dengan jadwal GitHub sebagai cadangan.
+# Rahasia ada di Settings -> Secrets and variables -> Actions. Lihat PANDUAN-CLOUD.md.
+name: Sync jurnal
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "normal / full (tarik ulang semua riwayat) / rechart (hitung ulang chart)"
+        required: false
+        default: normal
+        type: choice
+        options: [normal, full, rechart]
+  schedule:
+    - cron: "7 * * * *"   # cadangan: tiap jam, bila cron-job.org terlambat/mati
+
+concurrency:
+  group: sync-jurnal
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      JURNAL_DATA_DIR: ${{ github.workspace }}\.jurnal-state
+      SUPABASE_URL: https://nhbyarsjourxjxtigmrb.supabase.co
+      SUPABASE_ANON_KEY: sb_publishable_aHGGKQv3cCWOJVWjdeIGMQ_NlyjAxLR
+      MT5_INSTALLER_URL: ${{ vars.MT5_INSTALLER_URL || 'https://download.mql5.com/cdn/web/exness.technologies.ltd/mt5/exness5setup.exe' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: sync-agent/requirements.txt
+
+      - name: Pasang library Python
+        run: pip install -r sync-agent/requirements.txt
+
+      - name: Pasang MetaTrader 5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Invoke-WebRequest $env:MT5_INSTALLER_URL -OutFile "$env:RUNNER_TEMP\mt5setup.exe"
+          Start-Process "$env:RUNNER_TEMP\mt5setup.exe" -ArgumentList "/auto"
+          # Installer web mengunduh terminal di latar belakang: tunggu sampai terminal64.exe muncul
+          $exe = $null
+          for ($i = 0; $i -lt 60 -and -not $exe; $i++) {
+            Start-Sleep -Seconds 5
+            $exe = Get-ChildItem "C:\Program Files", "C:\Program Files (x86)" -Filter terminal64.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $exe) { throw "MetaTrader 5 tidak terpasang dalam 5 menit" }
+          Start-Sleep -Seconds 20   # beri waktu installer menyelesaikan file lain
+          Get-Process terminal64, mt5setup -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Host "Terminal: $($exe.FullName)"
+          "MT5_TERMINAL_PATH=$($exe.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Ambil catatan sync sebelumnya
+        uses: actions/cache/restore@v4
+        with:
+          path: .jurnal-state
+          key: jurnal-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: jurnal-state-
+
+      - name: Sync MT5 ke Supabase
+        working-directory: sync-agent
+        shell: pwsh
+        env:
+          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
+          MT5_SERVER: ${{ secrets.MT5_SERVER }}
+          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
+          SUPABASE_EMAIL: ${{ secrets.SUPABASE_EMAIL }}
+          SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
+          MODE: ${{ inputs.mode || 'normal' }}
+        run: |
+          New-Item -ItemType Directory -Force $env:JURNAL_DATA_DIR | Out-Null
+          Remove-Item "$env:JURNAL_DATA_DIR\sync.lock", "$env:JURNAL_DATA_DIR\sync.log" -ErrorAction SilentlyContinue
+          $flag = @()
+          if ($env:MODE -eq "full") { $flag = @("--full") }
+          if ($env:MODE -eq "rechart") { $flag = @("--rechart") }
+          python sync_agent.py @flag
+
+      - name: Simpan catatan sync
+        if: always()
+        shell: pwsh
+        run: Remove-Item "$env:JURNAL_DATA_DIR\sync.log", "$env:JURNAL_DATA_DIR\sync.lock" -ErrorAction SilentlyContinue
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .jurnal-state
+          key: jurnal-state-${{ github.run_id }}-${{ github.run_attempt }}

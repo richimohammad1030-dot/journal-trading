@@ -10,6 +10,8 @@ Jurnal trading pribadi yang terisi otomatis dari akun MetaTrader 5. Read-only, t
 | `sync-agent/` | Program Python di PC Windows yang menarik riwayat MT5 ke Supabase |
 | `PANDUAN-SETUP.md` | Langkah setup lengkap dari awal |
 | `PANDUAN-CLOUD.md` | Sync selalu on lewat GitHub Actions (tanpa laptop) |
+| `PANDUAN-BINANCE.md` | Menyambungkan akun Binance Futures (sync di Supabase) |
+| `supabase/functions/binance-sync/` | Edge Function sync Binance USDⓈ-M Futures |
 
 ## Fitur
 

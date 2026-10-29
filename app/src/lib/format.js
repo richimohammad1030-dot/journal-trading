@@ -2,7 +2,9 @@ export const TZ = 'Asia/Jakarta'
 
 export function money(v, cur = 'USD', { sign = false, compact = false } = {}) {
   if (v == null || Number.isNaN(v)) return '–'
-  const opts = { style: 'currency', currency: cur || 'USD', maximumFractionDigits: compact && Math.abs(v) >= 1000 ? 1 : 2, minimumFractionDigits: compact ? 0 : 2 }
+  // Stablecoin (USDT/USDC) ditampilkan seperti dolar
+  const c = /^(USDT|USDC|BUSD|FDUSD)$/.test(cur || '') ? 'USD' : cur || 'USD'
+  const opts = { style: 'currency', currency: c, maximumFractionDigits: compact && Math.abs(v) >= 1000 ? 1 : 2, minimumFractionDigits: compact ? 0 : 2 }
   if (compact) opts.notation = 'compact'
   let s
   try { s = new Intl.NumberFormat('en-US', opts).format(Math.abs(v)) } catch { s = Math.abs(v).toFixed(2) }

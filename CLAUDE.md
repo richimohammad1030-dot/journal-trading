@@ -25,6 +25,7 @@ MT5 ──> sync-agent (Python). Utama: GitHub Actions Windows (.github/workflow
 - Repo **public** (supaya menit Actions gratis). Jangan pernah mencetak saldo/nomor akun di luar nilai secret (otomatis disamarkan), dan jangan commit data pribadi.
 - State sync (`state.json`: offset, last_sync, sltp_seen, charted) di mode cloud disimpan lewat actions/cache (`.jurnal-state`). Bila hilang, sync berikutnya otomatis full.
 - Telegram tidak dipakai di mode cloud (sesuai keinginan Richi: cukup dashboard).
+- **Akun kedua: Binance USDⓈ-M Futures** (mode One-way). Sync = Supabase Edge Function `supabase/functions/binance-sync` (logika murni di `lib.ts`), dipanggil `pg_cron` job `binance-sync` tiap 15 menit lewat `pg_net` dengan header `x-region: ap-southeast-1` (Binance memblokir IP AS, jadi BUKAN GitHub Actions) dan `x-cron-secret` (nilai di tabel `app_secrets`, RLS tanpa policy). Secrets function: `BINANCE_API_KEY`, `BINANCE_API_SECRET` (read-only). Akun: `server='Binance-USDM'`, currency `USDT`. Tiket fill = hash simbol 12 bit·2^40 + trade id (< 2^52); funding disimpan di `deals` type=11 dengan tiket ≥ 2^52 lalu dijumlahkan ke `trades.swap`; posisi hasil flip memakai id negatif. Riwayat API hanya ~3 bulan → cashflow tiket 1 = "saldo awal (perkiraan)". State di tabel `sync_state`. pips null untuk crypto (UI memakai % harga). Deploy function lewat Supabase MCP `deploy_edge_function` (verify_jwt=false). Panduan: `PANDUAN-BINANCE.md`.
 
 ## Struktur
 | Path | Isi |
@@ -44,7 +45,7 @@ MT5 ──> sync-agent (Python). Utama: GitHub Actions Windows (.github/workflow
 Stack app: React 19, Vite 8, Tailwind v4, vite-plugin-pwa, recharts, lightweight-charts v5 (lazy, `localization.locale='en-US'`). Tema memakai CSS variables + `data-theme`.
 
 ## Database Supabase (project `nhbyarsjourxjxtigmrb`)
-Tabel: `accounts`, `deals`, `trades`, `cashflows`, `open_positions`, `position_sltp_log`, `account_snapshots`, `sync_runs`, `trade_bars`, `share_links`. Ada juga RPC `public_profile(p_token)` (SECURITY DEFINER, di-grant ke anon; warning advisor-nya disengaja).
+Tabel: `accounts`, `deals`, `trades`, `cashflows`, `open_positions`, `position_sltp_log`, `account_snapshots`, `sync_runs`, `trade_bars`, `share_links`, `sync_state`, `app_secrets`. Ada juga RPC `public_profile(p_token)` (SECURITY DEFINER, di-grant ke anon; warning advisor-nya disengaja).
 - Semua tabel memakai RLS `user_id = auth.uid()`.
 - Kunci upsert:
   - `accounts(user_id,login,server)`
@@ -52,7 +53,7 @@ Tabel: `accounts`, `deals`, `trades`, `cashflows`, `open_positions`, `position_s
   - `trades(account_id,position_id)`
   - `trade_bars(account_id,position_id,kind)`
   - `share_links(account_id)`
-- Migrasi yang sudah diterapkan: `init_journal_schema`, `stage2_price_context`, `stage4_public_profile`. SQL lengkapnya ada di dashboard Supabase (Database → Migrations), belum disalin ke repo.
+- Migrasi yang sudah diterapkan: `init_journal_schema`, `stage2_price_context`, `stage4_public_profile`, `binance_sync` (sync_state, app_secrets, RPC `binance_opening_balance_inputs`, ekstensi pg_cron + pg_net). SQL lengkapnya ada di dashboard Supabase (Database → Migrations), belum disalin ke repo.
 
 ## Aturan perhitungan (jangan diubah tanpa alasan)
 - Waktu disimpan dalam UTC. Offset server broker dikoreksi otomatis (Exness = UTC+0).

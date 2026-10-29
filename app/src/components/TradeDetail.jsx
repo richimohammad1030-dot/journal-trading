@@ -40,19 +40,25 @@ function ChartBlock({ t, accountId }) {
 }
 
 function Excursion({ t, cur }) {
-  if (t.mfe_pips == null && t.mae_pips == null) return null
-  const mae = +t.mae_pips || 0, mfe = +t.mfe_pips || 0
-  const total = Math.max(mae + mfe, 0.1)
+  // Forex/emas: dalam pip. Crypto (tanpa pip): dalam % dari harga entry.
+  const usePips = t.mfe_pips != null || t.mae_pips != null
+  if (!usePips && t.mae == null && t.mfe == null) return null
+  const op = +t.open_price || 1
+  const conv = (pipV, priceV) => (usePips ? +pipV || 0 : ((+priceV || 0) / op) * 100)
+  const mae = conv(t.mae_pips, t.mae), mfe = conv(t.mfe_pips, t.mfe)
+  const move = usePips ? +t.pips || 0 : (((t.direction === 'buy' ? 1 : -1) * (+t.close_price - op)) / op) * 100
+  const fmtU = (v) => (usePips ? `${num(v, 1)} pip` : `${num(v, 2)}%`)
+  const total = Math.max(mae + mfe, usePips ? 0.1 : 0.001)
   const zero = (mae / total) * 100
-  const exitPos = zero + ((t.pips || 0) / total) * 100
+  const exitPos = zero + (move / total) * 100
   const eff = t.net_pnl > 0 ? t.exit_efficiency : null // untuk trade rugi, efisiensi negatif tidak bermakna
   const effTone = eff == null ? 'text-muted' : eff >= 0.6 ? 'text-up' : eff >= 0.3 ? 'text-ink' : 'text-warn'
-  const unit = (p, a, r) => [p != null && `${num(p, 1)} pip`, a != null && money(a, cur), r != null && `${num(r, 2)}R`].filter(Boolean).join(' · ')
+  const unit = (p, a, r) => [p != null && fmtU(p), a != null && money(a, cur), r != null && `${num(r, 2)}R`].filter(Boolean).join(' · ')
   return (
     <div className="card p-4">
       <div className="flex items-baseline justify-between mb-4">
         <span className="text-[11.5px] text-muted font-medium">Pergerakan selama posisi terbuka</span>
-        {eff != null ? <span className={`text-[12px] ${effTone}`}>Efisiensi exit <b className="num">{pct(Math.min(eff, 1), 0)}</b></span> : t.net_pnl < 0 && t.mfe_pips > 0 ? <span className="text-[12px] text-warn">Sempat untung <b className="num">{num(t.mfe_pips, 1)} pip</b></span> : null}
+        {eff != null ? <span className={`text-[12px] ${effTone}`}>Efisiensi exit <b className="num">{pct(Math.min(eff, 1), 0)}</b></span> : t.net_pnl < 0 && mfe > 0 ? <span className="text-[12px] text-warn">Sempat untung <b className="num">{fmtU(mfe)}</b></span> : null}
       </div>
       <div className="relative h-3 rounded-full overflow-hidden bg-raised">
         <div className="absolute inset-y-0 left-0" style={{ width: `${zero}%`, background: 'color-mix(in oklab, var(--down) 45%, transparent)' }} />
@@ -64,11 +70,11 @@ function Excursion({ t, cur }) {
       </div>
       <div className="flex justify-between text-[10.5px] text-faint mt-2"><span>◂ melawan (MAE)</span><span>entry</span><span>mendukung (MFE) ▸</span></div>
       <div className="grid grid-cols-2 gap-2 mt-3">
-        <div className="rounded-xl bg-raised p-2.5"><div className="text-[11px] text-muted">MAE (terjauh melawan)</div><div className="num text-[12.5px] text-down mt-0.5">{unit(t.mae_pips, t.mae_amount, t.mae_r)}</div></div>
-        <div className="rounded-xl bg-raised p-2.5"><div className="text-[11px] text-muted">MFE (terjauh mendukung)</div><div className="num text-[12.5px] text-up mt-0.5">{unit(t.mfe_pips, t.mfe_amount, t.mfe_r)}</div></div>
+        <div className="rounded-xl bg-raised p-2.5"><div className="text-[11px] text-muted">MAE (terjauh melawan)</div><div className="num text-[12.5px] text-down mt-0.5">{unit(mae, t.mae_amount, t.mae_r)}</div></div>
+        <div className="rounded-xl bg-raised p-2.5"><div className="text-[11px] text-muted">MFE (terjauh mendukung)</div><div className="num text-[12.5px] text-up mt-0.5">{unit(mfe, t.mfe_amount, t.mfe_r)}</div></div>
       </div>
       <p className="text-[11.5px] text-faint mt-3">
-        ◆ = posisi exit. {eff != null && eff < 0.3 && t.net_pnl > 0 ? 'Harga sempat bergerak jauh lebih menguntungkan dari titik exit.' : eff != null && eff >= 0.6 ? 'Exit mengambil sebagian besar pergerakan yang tersedia.' : t.net_pnl < 0 && t.mfe_pips > Math.abs(t.pips || 0) ? 'Posisi sempat untung sebelum berbalik menjadi rugi.' : ''}
+        ◆ = posisi exit. {eff != null && eff < 0.3 && t.net_pnl > 0 ? 'Harga sempat bergerak jauh lebih menguntungkan dari titik exit.' : eff != null && eff >= 0.6 ? 'Exit mengambil sebagian besar pergerakan yang tersedia.' : t.net_pnl < 0 && mfe > Math.abs(move) ? 'Posisi sempat untung sebelum berbalik menjadi rugi.' : ''}
       </p>
     </div>
   )

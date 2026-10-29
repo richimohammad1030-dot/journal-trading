@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, loadAccounts, loadAccountData, demoData, demoPublicProfile } from './lib/data'
+import { supabase, loadAccounts, loadAllData, accountsToUsd, demoData, demoPublicProfile } from './lib/data'
 import { traderDNA } from './lib/dna'
 import { PERIODS, buildCurve, computeTags, periodMetrics, periodRange, summarize } from './lib/stats'
 import { MARKETS, MARKET_ICON, market as marketOf } from './lib/markets'
@@ -76,7 +76,7 @@ export default function App() {
   const [mkt, setMktState] = useState(() => store.get('market', 'all'))
   const [collapsed, setCollapsedState] = useState(() => store.get('sidebar', '0') === '1')
   const [accounts, setAccounts] = useState(null)
-  const [accountId, setAccountIdState] = useState(() => store.get('account', null))
+  const [accountId, setAccountIdState] = useState(() => store.get('account', 'all'))
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [detail, setDetail] = useState(null)
@@ -130,47 +130,65 @@ export default function App() {
     return () => sub.subscription.unsubscribe()
   }, [])
 
-  // muat akun
-  useEffect(() => {
+  // muat semua akun yang tertaut, lalu gabungkan dalam USD
+  const load = useCallback(async (quiet) => {
     setErr(null)
-    if (demo) { const d = demoData(); setAccounts(d.accounts); setData(d); return }
+    if (demo) { const d = demoData(); setAccounts(accountsToUsd(d.accounts)); setData(d); return }
     if (!session) { setAccounts(null); setData(null); return }
-    loadAccounts().then(setAccounts).catch((e) => setErr(e.message))
+    if (!quiet) setData(null)
+    setRefreshing(true)
+    try {
+      const accs = await loadAccounts()
+      const all = await loadAllData(accs)
+      setAccounts(accountsToUsd(accs)); setData(all)
+    } catch (e) { setErr(e.message) } finally { setRefreshing(false) }
   }, [session, demo])
+  useEffect(() => { load() }, [load])
+  const reload = () => load(true)
 
-  const account = accounts?.find((a) => a.id === accountId) || accounts?.[0]
-
-  const reload = useCallback(() => {
-    if (demo || !account) return
-    setErr(null); setRefreshing(true)
-    Promise.all([loadAccounts().then(setAccounts), loadAccountData(account.id).then(setData)])
-      .catch((e) => setErr(e.message)).finally(() => setRefreshing(false))
-  }, [account?.id, demo]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (demo) return; setData(null); reload() }, [account?.id, demo]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selected = accountId !== 'all' ? accounts?.find((a) => a.id === accountId) || null : null
 
   const ctx = useMemo(() => {
-    if (!data || !account) return null
-    const accountTrades = [...data.trades].sort((a, b) => new Date(a.close_time) - new Date(b.close_time))
-    const curve = buildCurve(accountTrades, data.cashflows)
+    if (!data || !accounts?.length) return null
+    const scope = selected ? [selected] : accounts
+    const ids = new Set(scope.map((a) => a.id))
+    const inScope = (x) => ids.has(x.account_id)
+    const account = selected || {
+      id: 'all', name: accounts.length > 1 ? 'Semua akun' : accounts[0].name, broker: `${accounts.length} akun tertaut`, currency: 'USD',
+      balance: accounts.reduce((s, a) => s + (+a.balance || 0), 0), equity: accounts.reduce((s, a) => s + (+a.equity || 0), 0),
+      last_sync_at: accounts.map((a) => a.last_sync_at).filter(Boolean).sort()[0] || null,
+      is_real: accounts.some((a) => a.is_real), login: null, server: '', leverage: null,
+    }
+    const cashflows = data.cashflows.filter(inScope).sort((a, b) => new Date(a.time) - new Date(b.time))
+    const accountTrades = data.trades.filter(inScope).sort((a, b) => new Date(a.close_time) - new Date(b.close_time))
+    const curve = buildCurve(accountTrades, cashflows)
     const before = new Map()
     let bal = 0
-    const ev = [...data.cashflows.map((c) => ({ t: c.time, a: +c.amount })), ...accountTrades.map((t) => ({ t: t.close_time, a: +t.net_pnl, id: t.position_id }))].sort((x, y) => new Date(x.t) - new Date(y.t))
+    const ev = [...cashflows.map((c) => ({ t: c.time, a: +c.amount })), ...accountTrades.map((t) => ({ t: t.close_time, a: +t.net_pnl, id: t.position_id }))].sort((x, y) => new Date(x.t) - new Date(y.t))
     for (const e of ev) { if (e.id != null) before.set(e.id, bal); bal += e.a }
     for (const t of accountTrades) { t.balance_before = before.get(t.position_id); t.market = marketOf(t.symbol) }
     const marketCounts = { all: accountTrades.length }
     for (const t of accountTrades) marketCounts[t.market] = (marketCounts[t.market] || 0) + 1
     const allTrades = mkt === 'all' ? accountTrades : accountTrades.filter((t) => t.market === mkt)
     const [from, to] = periodRange(period)
-    const trades = allTrades.filter((t) => { const ts = +new Date(t.close_time); return (!from || ts >= from) && (!to || ts < to) })
-    const tags = computeTags(accountTrades, data.sltp)
     const inRange = (iso) => { const ts = +new Date(iso); return (!from || ts >= from) && (!to || ts < to) }
+    const trades = allTrades.filter((t) => inRange(t.close_time))
+    // tag dihitung per akun (pola martingale/revenge hanya bermakna di dalam satu akun)
+    const tags = new Map()
+    for (const a of scope) for (const [k, v] of computeTags(accountTrades.filter((t) => t.account_id === a.id), data.sltp.filter((l) => l.account_id === a.id))) tags.set(k, v)
+    const linked = accounts.map((a) => {
+      const ts = data.trades.filter((t) => t.account_id === a.id && inRange(t.close_time) && (mkt === 'all' || marketOf(t.symbol) === mkt))
+      return { ...a, n: ts.length, net: ts.reduce((s, t) => s + +t.net_pnl, 0), wins: ts.filter((t) => t.net_pnl > 0).length,
+        markets: [...new Set(data.trades.filter((t) => t.account_id === a.id).map((t) => marketOf(t.symbol)))] }
+    })
     return {
-      account, accounts, accountTrades, allTrades, trades, curve, cashflows: data.cashflows, positions: data.positions, runs: data.runs,
-      periodCashflows: data.cashflows.filter((c) => inRange(c.time)), period, market: mkt, setMarket, marketCounts, range: [from, to],
+      account, accounts, linked, selected, accountTrades, allTrades, trades, curve, cashflows,
+      positions: data.positions.filter(inScope), runs: data.runs.filter(inScope),
+      periodCashflows: cashflows.filter((c) => inRange(c.time)), period, market: mkt, setMarket, marketCounts, range: [from, to],
       s: summarize(trades), pm: periodMetrics(curve, from, to), tags, accountId: account.id,
       dna: traderDNA(trades, tags),
     }
-  }, [data, account, accounts, period, mkt]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data, accounts, selected, period, mkt]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (route.startsWith('p/')) {
     const token = route.slice(2)
@@ -189,10 +207,14 @@ export default function App() {
   const cur = route === 'akun' ? ACCOUNT_ROUTE : NAV.find((n) => n[0] === route) || NAV[0]
   const Page = cur[3]
   const di = detail ? detail.list.findIndex((x) => x.position_id === detail.t.position_id) : -1
+  const account = ctx?.account
   const syncAge = account?.last_sync_at ? Date.now() - new Date(account.last_sync_at) : Infinity
   const syncTone = syncAge < 45 * 60e3 ? 'text-up' : syncAge < 6 * 3600e3 ? 'text-warn' : 'text-down'
   const initial = (account?.name || 'T').trim()[0]?.toUpperCase()
   const navBtn = (on) => `group relative flex items-center gap-3 rounded-xl text-[14px] transition ${collapsed ? 'justify-center h-11 w-11 mx-auto' : 'px-3.5 h-11'} ${on ? 'nav-on font-semibold' : 'text-muted hover:text-ink hover:bg-raised/70'}`
+  const toneOf = (iso) => { const a = iso ? Date.now() - new Date(iso) : Infinity; return a < 45 * 60e3 ? 'text-up' : a < 6 * 3600e3 ? 'text-warn' : 'text-down' }
+  const accOptions = accounts ? [['all', 'Semua akun', `${accounts.length} akun · ${money(accounts.reduce((s, a) => s + (+a.balance || 0), 0), 'USD')}`],
+    ...accounts.map((a) => [a.id, a.name, `${a.broker || ''} · ${money(+a.balance, 'USD')}`])] : []
   const Tip = ({ children }) => collapsed ? <span className="pointer-events-none absolute left-full ml-3 px-2 py-1 rounded-md bg-raised border border-line text-[12px] text-ink whitespace-nowrap opacity-0 group-hover:opacity-100 transition z-50">{children}</span> : null
 
   return (
@@ -213,7 +235,7 @@ export default function App() {
             </button>
           ))}
         </nav>
-        {!collapsed && <div className="mt-7 mb-2 px-3 text-[11px] font-semibold tracking-[.14em] text-faint">PASAR</div>}
+        {!collapsed && <div className="mt-6 mb-2 px-3 text-[11px] font-semibold tracking-[.14em] text-faint">PASAR</div>}
         {collapsed && <div className="my-4 mx-3 border-t border-line" />}
         <nav className="space-y-1">
           {MARKETS.map(([id, label]) => (
@@ -225,6 +247,21 @@ export default function App() {
             </button>
           ))}
         </nav>
+        {accounts?.length > 0 && <>
+          {!collapsed && <div className="mt-6 mb-2 px-3 text-[11px] font-semibold tracking-[.14em] text-faint">AKUN TERTAUT</div>}
+          {collapsed && <div className="my-4 mx-3 border-t border-line" />}
+          <nav className="space-y-1 overflow-y-auto scroll-thin min-h-0">
+            {[{ id: 'all', name: 'Semua akun', last_sync_at: null }, ...accounts].map((a) => (
+              <button key={a.id} onClick={() => setAccountId(a.id)} className={navBtn(accountId === a.id || (a.id === 'all' && !selected))}>
+                {a.id === 'all' ? <Icon d={I.wallet} className="w-5 h-5 shrink-0" />
+                  : <span className="w-5 h-5 shrink-0 grid place-items-center"><span className={`w-2 h-2 rounded-full bg-current ${toneOf(a.last_sync_at)}`} /></span>}
+                {!collapsed && <><span className="flex-1 min-w-0 text-left truncate">{a.name}</span>
+                  {a.id !== 'all' && <span className="num text-[11px] text-faint">{money(+a.balance, 'USD', { compact: true })}</span>}</>}
+                <Tip>{a.name}</Tip>
+              </button>
+            ))}
+          </nav>
+        </>}
 
         <div className="mt-auto space-y-2">
           {!collapsed && account && (
@@ -232,7 +269,7 @@ export default function App() {
               <div className="flex items-center gap-2 text-[12.5px] font-semibold">
                 <span className={`pulse-dot w-2 h-2 rounded-full bg-current ${syncTone}`} />Sync otomatis
               </div>
-              <div className="text-[11.5px] text-muted mt-1">Terakhir {ago(account.last_sync_at)} · tiap 15 menit dari cloud</div>
+              <div className="text-[11.5px] text-muted mt-1">{selected ? `Terakhir ${ago(account.last_sync_at)}` : `Akun paling lama: ${ago(account.last_sync_at)}`} · tiap 15 menit dari cloud</div>
               {!demo && <button onClick={reload} className="mt-2.5 w-full h-8 rounded-lg nav-on text-[12px] font-semibold flex items-center justify-center gap-2">
                 <Icon d={I.refresh} className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />Muat ulang data
               </button>}
@@ -256,9 +293,8 @@ export default function App() {
           <div className="ml-auto flex items-center gap-2.5">
             {cur[4] && <Dropdown icon={I.cal} value={period} options={PERIODS} onChange={changePeriod} />}
             {accounts?.length > 0 && (
-              <Dropdown icon={I.wallet} value={account?.id} onChange={setAccountId}
-                label={account ? `${account.name}` : 'Akun'}
-                options={accounts.map((a) => [a.id, a.name, `#${a.login} · ${money(+a.balance, a.currency)}`])} />
+              <Dropdown icon={I.wallet} value={selected ? selected.id : 'all'} onChange={setAccountId}
+                label={account ? account.name : 'Akun'} options={accOptions} />
             )}
             {!demo && account && <button onClick={reload} className="card w-11 h-11 rounded-xl grid place-items-center text-muted hover:text-ink transition" aria-label="Muat ulang" title={`Sync terakhir ${ago(account.last_sync_at)}`}>
               <Icon d={I.refresh} className={`w-[18px] h-[18px] ${refreshing ? 'animate-spin' : ''}`} />
@@ -301,6 +337,7 @@ export default function App() {
         </nav>
         {(cur[4] || route === 'kalender') && (
           <div className="px-4 pb-2.5 pt-2 space-y-2">
+            {accounts?.length > 1 && <Chips value={selected ? selected.id : 'all'} onChange={setAccountId} options={accOptions.map(([id, l]) => [id, l])} />}
             {cur[4] && <Chips value={period} onChange={changePeriod} options={PERIODS} />}
             <Chips value={mkt} onChange={setMarket} options={MARKETS.map(([id, l]) => [id, `${l}${ctx ? ` · ${ctx.marketCounts[id] || 0}` : ''}`])} />
           </div>
@@ -325,7 +362,7 @@ export default function App() {
       </main>
 
       {palette && ctx && (
-        <CommandPalette trades={ctx.accountTrades} cur={ctx.account.currency} nav={NAV} onClose={() => setPalette(false)}
+        <CommandPalette trades={ctx.accountTrades} cur="USD" nav={NAV} onClose={() => setPalette(false)}
           onGo={(r) => { setPalette(false); go(r) }}
           onTrade={(t) => { setPalette(false); setDetail({ t, list: ctx.accountTrades }) }}
           onMarket={(m) => { setPalette(false); setMarket(m) }} />
@@ -333,7 +370,7 @@ export default function App() {
 
       {detail && ctx && (
         <TradeDetail
-          t={detail.t} cur={ctx.account.currency} accountId={demo ? null : ctx.account.id} tags={ctx.tags.get(detail.t.position_id)}
+          t={detail.t} cur="USD" accountId={demo ? null : detail.t.account_id} tags={ctx.tags.get(detail.t.position_id)}
           onClose={() => setDetail(null)}
           onPrev={di > 0 ? () => setDetail({ ...detail, t: detail.list[di - 1] }) : null}
           onNext={di >= 0 && di < detail.list.length - 1 ? () => setDetail({ ...detail, t: detail.list[di + 1] }) : null}

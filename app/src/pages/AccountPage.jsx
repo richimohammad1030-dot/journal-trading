@@ -5,6 +5,13 @@ import SetPassword from './SetPassword'
 import { ago, fmtDateTime, money } from '../lib/format'
 
 function ShareCard({ account, demo }) {
+  if (account.id === 'all') return (
+    <Card title="Profil publik"><p className="text-[12.5px] text-muted">Profil publik dibuat per akun. Pilih salah satu akun di daftar "Akun tertaut" untuk membuat atau mengatur tautannya.</p></Card>
+  )
+  return <ShareCardInner account={account} demo={demo} />
+}
+
+function ShareCardInner({ account, demo }) {
   const [link, setLink] = useState(null)
   const [busy, setBusy] = useState(!demo)
   const [msg, setMsg] = useState(null)
@@ -51,16 +58,22 @@ export default function AccountPage({ ctx }) {
   return (
     <div className="grid lg:grid-cols-2 gap-4 items-start">
       <div className="space-y-4">
-        <Card title="Akun MT5">
+        <Card title="Akun tertaut">
           <div className="space-y-2">
+            {accounts.length > 1 && (
+              <button onClick={() => setAccountId('all')} className={`w-full text-left rounded-xl border px-3.5 py-3 transition ${account.id === 'all' ? 'border-accent bg-accent/5' : 'border-line hover:bg-raised'}`}>
+                <div className="font-semibold">Semua akun</div>
+                <div className="text-[12px] text-muted mt-0.5">{accounts.length} akun digabung · total {money(accounts.reduce((s, a) => s + (+a.balance || 0), 0), 'USD')}</div>
+              </button>
+            )}
             {accounts.map((a) => (
               <button key={a.id} onClick={() => setAccountId(a.id)} className={`w-full text-left rounded-xl border px-3.5 py-3 transition ${a.id === account.id ? 'border-accent bg-accent/5' : 'border-line hover:bg-raised'}`}>
                 <div className="flex items-center justify-between">
                   <span className="font-semibold">{a.name || a.login}</span>
                   <Badge tone={a.is_real ? 'warn' : 'muted'}>{a.is_real ? 'Real' : 'Demo'}</Badge>
                 </div>
-                <div className="text-[12px] text-muted mt-0.5">#{a.login} · {a.server} · {a.broker}</div>
-                <div className="text-[12px] text-faint mt-0.5">Leverage 1:{a.leverage} · {a.currency} · sync {ago(a.last_sync_at)}</div>
+                <div className="text-[12px] text-muted mt-0.5">{a.server === 'Binance-USDM' ? 'Binance USDⓈ-M Futures' : `#${a.login} · ${a.server}`} · {a.broker}</div>
+                <div className="text-[12px] text-faint mt-0.5">{a.leverage ? `Leverage 1:${a.leverage} · ` : ''}Balance {money(+a.balance, 'USD')}{a.orig_currency && a.orig_currency !== 'USD' ? ` (asli ${a.orig_currency})` : ''} · sync {ago(a.last_sync_at)}</div>
               </button>
             ))}
           </div>
@@ -74,7 +87,7 @@ export default function AccountPage({ ctx }) {
             <div className="divide-y divide-line -my-2">
               {runs.map((r, i) => (
                 <div key={i} className="flex justify-between py-2 text-[12.5px]">
-                  <span className="text-muted">{r.finished_at ? fmtDateTime(r.finished_at) : fmtDateTime(r.started_at)}</span>
+                  <span className="text-muted">{r.finished_at ? fmtDateTime(r.finished_at) : fmtDateTime(r.started_at)}{r.account_name && account.id === 'all' ? <span className="text-faint"> · {r.account_name}</span> : null}</span>
                   <span className={r.status === 'ok' ? 'text-up' : r.status === 'running' ? 'text-warn' : 'text-down'}>{r.status === 'ok' ? `OK · ${r.trades_count} trade` : r.status === 'running' ? 'terputus' : 'gagal'}</span>
                 </div>
               ))}
@@ -92,7 +105,7 @@ export default function AccountPage({ ctx }) {
               </div>
               <div className="divide-y divide-line border-t border-line">
                 {[...cashflows].reverse().map((c) => (
-                  <div key={c.ticket} className="flex justify-between py-2 text-[12.5px]">
+                  <div key={`${c.account_id}-${c.ticket}`} className="flex justify-between py-2 text-[12.5px]">
                     <span><span className="capitalize">{c.kind === 'deposit' ? 'Deposit' : c.kind === 'withdrawal' ? 'Withdrawal' : c.kind}</span> <span className="text-faint">· {fmtDateTime(c.time)}</span></span>
                     <span className={`num ${c.amount >= 0 ? 'text-up' : 'text-down'}`}>{money(+c.amount, account.currency, { sign: true })}</span>
                   </div>

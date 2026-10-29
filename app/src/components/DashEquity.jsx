@@ -42,6 +42,8 @@ export default function DashEquity({ curve, trades, cur, marketFiltered }) {
   }, [curve, trades, m, range])
 
   const last = points.at(-1)
+  // tick sumbu-x eksplisit (6 titik rata) agar label tidak bertumpuk bila ada waktu yang sama
+  const xTicks = points.length > 1 ? Array.from({ length: 6 }, (_, i) => points[0].ts + ((points.at(-1).ts - points[0].ts) * i) / 5) : undefined
   const first = points[0]
   const up = m === 'dd' ? false : (last?.v ?? 0) >= (m === 'pnl' ? 0 : first?.v ?? 0)
   const color = m === 'dd' ? 'var(--down)' : up ? 'var(--up)' : 'var(--down)'
@@ -79,7 +81,7 @@ export default function DashEquity({ curve, trades, cur, marketFiltered }) {
                   <stop offset="100%" stopColor={color} stopOpacity={0.02} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="ts" type="number" domain={['dataMin', 'dataMax']} scale="time" tick={axis} tickLine={false} axisLine={false} minTickGap={50} tickFormatter={(v) => fmtDate(new Date(v).toISOString())} />
+              <XAxis dataKey="ts" type="number" domain={['dataMin', 'dataMax']} scale="time" ticks={xTicks} interval={0} tick={axis} tickLine={false} axisLine={false} minTickGap={50} tickFormatter={(v) => fmtDate(new Date(v).toISOString())} />
               <YAxis tick={axis} tickLine={false} axisLine={false} width={60} tickFormatter={fmtY} domain={m === 'dd' ? ['dataMin', 0] : ['auto', 'auto']} />
               <Tooltip content={<Tip mode={m} cur={cur} />} cursor={{ stroke: color, strokeDasharray: '3 4', strokeOpacity: 0.6 }} />
               {m !== 'bal' && <ReferenceLine y={0} stroke="var(--line)" />}

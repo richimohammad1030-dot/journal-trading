@@ -118,6 +118,60 @@ function sharpe(curve, from) {
   return sd > 0 ? (mean / sd) * Math.sqrt(252) : null
 }
 
+function LinkedAccounts({ ctx }) {
+  const { linked, selected, setAccountId, market, period } = ctx
+  const total = linked.reduce((s, a) => s + Math.max(0, +a.balance || 0), 0) || 1
+  const pLabel = { all: 'semua waktu', today: 'hari ini', week: 'minggu ini', month: 'bulan ini', '30d': '30 hari', '90d': '90 hari', ytd: 'tahun ini' }[period] || ''
+  return (
+    <section className="fade-up">
+      <div className="flex items-center justify-between mb-2.5">
+        <h2 className="font-semibold text-[15px]">Akun Tertaut <span className="text-muted font-normal text-[13px]">· {linked.length}</span></h2>
+        {selected && <button onClick={() => setAccountId('all')} className="text-[13px] text-accent font-semibold">← Lihat semua akun</button>}
+      </div>
+      <div className="flex gap-3 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0 md:grid md:grid-cols-2 xl:grid-cols-4 md:overflow-visible">
+        {linked.map((a) => {
+          const on = selected?.id === a.id
+          const age = a.last_sync_at ? Date.now() - new Date(a.last_sync_at) : Infinity
+          const tone = age < 45 * 60e3 ? 'text-up' : age < 6 * 3600e3 ? 'text-warn' : 'text-down'
+          const share = Math.max(0, +a.balance || 0) / total
+          return (
+            <button key={a.id} onClick={() => setAccountId(on ? 'all' : a.id)}
+              className={`card card-hover p-4 text-left min-w-[250px] md:min-w-0 shrink-0 ${on ? '!border-accent/70 shadow-[0_0_0_3px_rgb(var(--glow)/.12)]' : selected ? 'opacity-60 hover:opacity-100' : ''}`}>
+              <div className="flex items-center gap-2.5">
+                <span className="icon-tile shrink-0"><Icon d={a.server === 'Binance-USDM' ? MARKET_ICON.crypto : MARKET_ICON.gold} className="w-4 h-4" /></span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold text-[14px] truncate">{a.name}</div>
+                  <div className="text-[11.5px] text-faint truncate">{a.broker}{a.orig_currency && a.orig_currency !== 'USD' ? ` · ${a.orig_currency}→USD` : ''}</div>
+                </div>
+                <span className={`flex items-center gap-1.5 text-[11px] ${tone}`} title={`Sync ${ago(a.last_sync_at)}`}><span className="pulse-dot w-1.5 h-1.5 rounded-full bg-current" />{ago(a.last_sync_at)}</span>
+              </div>
+              <div className="flex items-end justify-between gap-2 mt-3">
+                <div>
+                  <div className="text-[11px] text-muted">Balance</div>
+                  <div className="num text-[19px] font-bold leading-tight">{money(+a.balance, 'USD')}</div>
+                  {+a.equity !== +a.balance && <div className="text-[11px] text-faint">Equity <span className="num">{money(+a.equity, 'USD')}</span></div>}
+                </div>
+                <div className="text-right">
+                  <div className="text-[11px] text-muted">P&L {pLabel}{market !== 'all' ? ` · ${MARKETS.find((m) => m[0] === market)?.[1]}` : ''}</div>
+                  <div className={`num text-[15px] font-semibold ${pnlColor(a.net)}`}>{a.n ? money(a.net, 'USD', { sign: true }) : '–'}</div>
+                  <div className="text-[10.5px] text-faint">{a.n} trade{a.n ? ` · win ${pct(a.wins / a.n, 0)}` : ''}</div>
+                </div>
+              </div>
+              <div className="mt-3 h-1.5 rounded-full bg-raised overflow-hidden" title={`${pct(share, 0)} dari total balance`}>
+                <div className="h-full rounded-full bg-accent bar-grow origin-left" style={{ width: `${share * 100}%` }} />
+              </div>
+              <div className="flex justify-between text-[10.5px] text-faint mt-1">
+                <span>{a.markets.filter((m) => m !== 'other').map((m) => MARKETS.find((x) => x[0] === m)?.[1]).join(' · ') || 'Belum ada trade'}</span>
+                <span>{pct(share, 0)} dari total</span>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 export default function Overview({ ctx }) {
   const { account, s, pm, trades, allTrades, accountTrades, positions, tags, openTrade, go, dna, curve, market, setMarket, range } = ctx
   const cur = account.currency
@@ -151,7 +205,7 @@ export default function Overview({ ctx }) {
   const pf = s.profitFactor === Infinity ? '∞' : num(s.profitFactor, 2)
   const floating = positions.reduce((a, p) => a + +p.profit + +(p.swap || 0), 0)
   const gMax = Math.max(1e-9, ...groups.map((g) => Math.abs(g.net)))
-  const firstName = (account.name || 'Trader').split(/[\s·]/)[0]
+  const firstName = account.id === 'all' ? 'Trader' : (account.name || 'Trader').split(/[\s·]/)[0]
   const [q1, q2] = QUOTES[qi]
 
   return (
@@ -160,7 +214,7 @@ export default function Overview({ ctx }) {
       <div className="grid lg:grid-cols-[1fr_auto] 2xl:grid-cols-[1fr_auto_340px] gap-4 items-center">
         <div className="fade-up">
           <h1 className="text-[24px] md:text-[30px] font-bold tracking-tight leading-tight">{greeting()}, {firstName}</h1>
-          <p className="text-muted text-[13.5px] md:text-[15px] mt-1">Pantau. Analisis. Tingkatkan. Balance <span className="num text-ink">{money(+account.balance, cur)}</span>
+          <p className="text-muted text-[13.5px] md:text-[15px] mt-1">Pantau. Analisis. Tingkatkan. {account.id === 'all' && ctx.accounts.length > 1 ? 'Total balance' : 'Balance'} <span className="num text-ink">{money(+account.balance, cur)}</span>
             {positions.length > 0 && <> · floating <span className={`num ${pnlColor(floating)}`}>{money(floating, cur, { sign: true })}</span></>}</p>
         </div>
         <div className="hidden md:block justify-self-start xl:justify-self-auto"><div className="seg">
@@ -171,6 +225,8 @@ export default function Overview({ ctx }) {
           <div key={qi} className="text-[13.5px] text-muted leading-snug sheet-in">{q1}<br /><span className="text-ink">{q2}</span></div>
         </div>
       </div>
+
+      {ctx.accounts.length > 0 && <LinkedAccounts ctx={ctx} />}
 
       {s.n === 0 ? (
         <div className="card"><Empty title="Belum ada trade di periode/pasar ini">Pilih periode atau pasar lain, atau tunggu sync berikutnya.</Empty></div>
@@ -289,7 +345,7 @@ export default function Overview({ ctx }) {
           <div className="grid md:grid-cols-2 xl:grid-cols-12 gap-4">
             <section className="card p-5 xl:col-span-5 fade-up">
               <h2 className="font-semibold text-[16px] mb-3">Performa per Pasar</h2>
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 {byMarket.map((b) => (
                   <button key={b.id} onClick={() => setMarket(market === b.id ? 'all' : b.id)} disabled={!b.n}
                     className={`rounded-xl border p-3 text-left transition ${market === b.id ? 'border-accent/60 bg-accent/10' : 'border-line bg-raised/30 hover:border-accent/40'} ${!b.n ? 'opacity-45' : ''}`}>

@@ -114,14 +114,22 @@ export function demoData() {
     }
   }
   trades.sort((a, b) => new Date(a.close_time) - new Date(b.close_time))
-  const balance = cashflows.reduce((s, c) => s + c.amount, 0) + trades.reduce((s, t) => s + t.net_pnl, 0)
+  // Dua akun contoh: MT5 (emas & forex) dan Binance Futures (crypto)
+  for (const t of trades) t.account_id = /^BTC/.test(t.symbol) ? 'demo-crypto' : 'demo'
+  for (const c of cashflows) c.account_id = 'demo'
+  cashflows.push({ ticket: 4, time: new Date(start - 864e5).toISOString(), kind: 'deposit', amount: 500, account_id: 'demo-crypto' })
+  const bal = (id) => cashflows.filter((c) => c.account_id === id).reduce((s, c) => s + c.amount, 0) + trades.filter((t) => t.account_id === id).reduce((s, t) => s + t.net_pnl, 0)
+  const sync = new Date(Date.now() - 42 * 60e3).toISOString()
   const account = {
-    id: 'demo', login: 88001234, server: 'DemoBroker-Server', name: 'Akun Demo', broker: 'Demo Broker',
-    currency: 'USD', leverage: 500, is_real: false, balance, equity: balance + 12.4,
-    last_sync_at: new Date(Date.now() - 42 * 60e3).toISOString(),
+    id: 'demo', login: 88001234, server: 'DemoBroker-Server', name: 'Akun Demo MT5', broker: 'Demo Broker',
+    currency: 'USD', leverage: 500, is_real: false, balance: bal('demo'), equity: bal('demo') + 12.4, last_sync_at: sync,
+  }
+  const crypto = {
+    id: 'demo-crypto', login: 1, server: 'Binance-USDM', name: 'Demo Binance Futures', broker: 'Binance',
+    currency: 'USDT', leverage: 20, is_real: false, balance: bal('demo-crypto'), equity: bal('demo-crypto'), last_sync_at: new Date(Date.now() - 6 * 60e3).toISOString(),
   }
   const positions = [
-    { ticket: 9001, symbol: 'XAUUSD', direction: 'buy', volume: 0.05, open_time: new Date(Date.now() - 3 * 3600e3).toISOString(), open_price: 2361.4, current_price: 2363.88, sl: 2355.0, tp: 2375.0, profit: 12.4, swap: 0, source: 'mobile' },
+    { ticket: 9001, account_id: 'demo', symbol: 'XAUUSD', direction: 'buy', volume: 0.05, open_time: new Date(Date.now() - 3 * 3600e3).toISOString(), open_price: 2361.4, current_price: 2363.88, sl: 2355.0, tp: 2375.0, profit: 12.4, swap: 0, source: 'mobile' },
   ]
   // contoh: dua trade yang SL-nya dilebarkan saat posisi berjalan
   const sltp = []
@@ -130,7 +138,7 @@ export function demoData() {
     sltp.push({ position_id: t.position_id, seen_at: t.open_time, sl: t.direction === 'buy' ? t.open_price - ps * 0.6 : t.open_price + ps * 0.6 })
     sltp.push({ position_id: t.position_id, seen_at: t.close_time, sl: t.sl })
   }
-  return { sltp, accounts: [account], trades, cashflows, positions, runs: [{ status: 'ok', finished_at: account.last_sync_at, trades_count: 3 }] }
+  return { sltp, accounts: [account, crypto], trades, cashflows, positions, runs: [{ status: 'ok', finished_at: account.last_sync_at, trades_count: 3, account_name: account.name }] }
 }
 
 export async function loadBars(accountId, positionId) {
@@ -171,4 +179,33 @@ export function demoPublicProfile() {
     trades: d.trades.map((t) => ({ ...t, volume: null, net_pnl: t.net_pnl * f, risk_amount: t.risk_amount && t.risk_amount * f })),
     cashflows: d.cashflows.map((c) => ({ ...c, amount: c.amount * f })),
   }
+}
+
+/* ------------------------------------------------------- gabungan multi-akun (USD) */
+// Semua nominal dikonversi ke USD: akun cent (USC) dibagi 100, stablecoin 1:1.
+export const usdRate = (cur) => (/^US[CX]$/i.test(cur || '') ? 0.01 : 1)
+const T_MONEY = ['profit', 'commission', 'swap', 'fee', 'net_pnl', 'risk_amount', 'mae_amount', 'mfe_amount']
+const conv = (o, keys, k) => { const x = { ...o }; for (const f of keys) if (x[f] != null) x[f] = +x[f] * k; return x }
+
+export function accountsToUsd(accounts) {
+  return accounts.map((a) => {
+    const k = usdRate(a.currency)
+    return { ...conv(a, ['balance', 'equity', 'margin', 'free_margin'], k), orig_currency: a.currency, currency: 'USD' }
+  })
+}
+
+/** Muat semua akun lalu gabungkan dalam USD. Setiap baris tetap membawa account_id. */
+export async function loadAllData(accounts) {
+  const per = await Promise.all(accounts.map((a) => loadAccountData(a.id)))
+  const out = { trades: [], cashflows: [], positions: [], runs: [], sltp: [] }
+  accounts.forEach((a, i) => {
+    const k = usdRate(a.currency), d = per[i]
+    out.trades.push(...d.trades.map((t) => ({ ...conv(t, T_MONEY, k), account_id: a.id })))
+    out.cashflows.push(...d.cashflows.map((c) => ({ ...conv(c, ['amount'], k), account_id: a.id })))
+    out.positions.push(...d.positions.map((p) => ({ ...conv(p, ['profit', 'swap'], k), account_id: a.id })))
+    out.runs.push(...d.runs.map((r) => ({ ...r, account_id: a.id, account_name: a.name })))
+    out.sltp.push(...d.sltp.map((l) => ({ ...l, account_id: a.id })))
+  })
+  out.runs.sort((x, y) => new Date(y.started_at) - new Date(x.started_at))
+  return out
 }

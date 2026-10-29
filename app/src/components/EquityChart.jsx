@@ -26,6 +26,7 @@ export default function EquityChart({ points, cur, relOnly = false }) {
   const color = up ? 'var(--up)' : 'var(--down)'
   const fmtY = (v) => (mode === 'bal' ? money(v, cur, { compact: true }) : pct(v, 0))
   const deposits = points.filter((p) => p.cash !== 0)
+  const xTicks = Array.from({ length: 5 }, (_, i) => points[0].ts + ((points.at(-1).ts - points[0].ts) * i) / 4)
   return (
     <div>
       {!relOnly && <Chips className="mb-3" value={mode} onChange={setMode} options={[['bal', 'Balance'], ['rel', 'Pertumbuhan %']]} />}
@@ -38,7 +39,7 @@ export default function EquityChart({ points, cur, relOnly = false }) {
                 <stop offset="100%" stopColor={color} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <XAxis dataKey="ts" type="number" domain={['dataMin', 'dataMax']} scale="time" tick={axis} tickLine={false} axisLine={false} minTickGap={40} tickFormatter={(v) => fmtDate(new Date(v).toISOString())} />
+            <XAxis dataKey="ts" type="number" domain={['dataMin', 'dataMax']} scale="time" ticks={xTicks} interval={0} tick={axis} tickLine={false} axisLine={false} minTickGap={40} tickFormatter={(v) => fmtDate(new Date(v).toISOString())} />
             <YAxis tick={axis} tickLine={false} axisLine={false} width={52} tickFormatter={fmtY} domain={['auto', 'auto']} />
             <Tooltip content={<Tip mode={mode} cur={cur} />} cursor={{ stroke: 'var(--line)' }} />
             {mode === 'rel' && <ReferenceLine y={0} stroke="var(--line)" />}
